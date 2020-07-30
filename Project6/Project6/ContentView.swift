@@ -9,17 +9,26 @@
 import Combine
 import SwiftUI
 
-class Order: ObservableObject {
+class Order: ObservableObject, Codable {
+
+    enum CodingKeys: String, CodingKey {
+        case type, quantity, specialRequestEnabled, extraFrosting, addSprinkles, name, streetAddress, city, zip
+    }
 
     static var types = ["Vanilla", "Strawberry", "Butterscotch", "Rainbow", "Chocolate"]
 
     @Published var type = 0
     @Published var quantity = 3
 
-    @Published var isSpecialRequestEnabled = false
+    @Published var isSpecialRequestEnabled = false {
+        didSet {
+            extraFrosting = false
+            addSprinkles = false
+        }
+    }
 
     @Published var extraFrosting = false
-    @Published var addSprinkers = false
+    @Published var addSprinkles = false
 
     @Published var name = ""
     @Published var streetAddress = ""
@@ -27,10 +36,54 @@ class Order: ObservableObject {
     @Published var zip = ""
 
     var isValid: Bool {
-        if name.isEmpty || streetAddress.isEmpty || city.isEmpty || zip.isEmpty {
+        if name.isEmpty || (name.trimmingCharacters(in: .whitespaces) == "") {
+            return false
+        } else if streetAddress.isEmpty || (streetAddress.trimmingCharacters(in: .whitespaces) == "") {
+            return false
+        } else if city.isEmpty || (city.trimmingCharacters(in: .whitespaces) == "") {
+            return false
+        } else if zip.isEmpty || (zip.trimmingCharacters(in: .whitespaces) == "") {
             return false
         }
         return true
+    }
+
+    var cost: Double {
+        var cost = Double(quantity) * 2
+        cost += (Double(type) / 2)
+        if extraFrosting {
+            cost += Double(quantity)
+        }
+        if addSprinkles {
+            cost += Double(quantity) / 2
+        }
+        return cost
+    }
+
+    init() {}
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(Int.self, forKey: .type)
+        quantity = try container.decode(Int.self, forKey: .quantity)
+        extraFrosting = try container.decode(Bool.self, forKey: .extraFrosting)
+        addSprinkles = try container.decode(Bool.self, forKey: .addSprinkles)
+        name = try container.decode(String.self, forKey: .name)
+        streetAddress = try container.decode(String.self, forKey: .streetAddress)
+        city = try container.decode(String.self, forKey: .city)
+        zip = try container.decode(String.self, forKey: .zip)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(quantity, forKey: .quantity)
+        try container.encode(extraFrosting, forKey: .extraFrosting)
+        try container.encode(addSprinkles, forKey: .addSprinkles)
+        try container.encode(streetAddress, forKey: .streetAddress)
+        try container.encode(name, forKey: .name)
+        try container.encode(city, forKey: .city)
+        try container.encode(zip, forKey: .zip)
     }
 
 }
@@ -38,12 +91,17 @@ class Order: ObservableObject {
 struct ContentView: View {
     @ObservedObject var order = Order()
 
+    @State private var confirmationMessage = ""
+    @State private var showingConfirmation = false
+
+    
+
     var body: some View {
         NavigationView {
             Form {
                 Section {
                     Picker("Cupcake Selection", selection: $order.type) {
-                        ForEach(0 ..< Order.types.count) {
+                        ForEach(0 ..< Order.types.count, id: \.self) {
                             Text(Order.types[$0]).tag($0)
                         }
                     }
@@ -63,7 +121,7 @@ struct ContentView: View {
                         Toggle(isOn: $order.extraFrosting) {
                             Text("Add extra Frostring")
                         }
-                        Toggle(isOn: $order.addSprinkers) {
+                        Toggle(isOn: $order.addSprinkles) {
                             Text("Add extra Sprinkers")
                         }
                     }
@@ -87,11 +145,38 @@ struct ContentView: View {
 
             }
             .navigationBarTitle("Cupcake Corner")
+            .alert(isPresented: $showingConfirmation) {
+                Alert(title: Text("Thank you!"), message: Text(confirmationMessage), dismissButton: .default(Text("OK")))
+            }
         }
     }
 
     func placeOrder() {
-        //TODO
+        guard let encoded = try? JSONEncoder().encode(order)
+            else {
+                print("Failed to Encode")
+                return
+        }
+
+        let url = URL(string: "https://reqres.in/api/cupcakes")!
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpMethod = "POST"
+        request.httpBody = encoded
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data = data else {
+                print("No data is response: \(error?.localizedDescription ?? "Unknown error").")
+                return
+            }
+
+            if let decodedOrder = try? JSONDecoder().decode(Order.self, from: data) {
+                self.confirmationMessage = "Your order for \(decodedOrder.quantity)x \(Order.types[decodedOrder.type].lowercased()) cupcakes is on its way!"
+                self.showingConfirmation = true
+            } else {
+                print("Invalid response from server")
+            }
+        }.resume()  // if resume is never called, the task will never start
     }
 }
 
